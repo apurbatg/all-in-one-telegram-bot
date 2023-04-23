@@ -2,9 +2,6 @@ pytube
 
 instaloader
 
-praw
+python-telegram-bot==13.9.0
 
-requests
-
-python-telegram-bot
-
+tqdm
