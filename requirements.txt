@@ -1,0 +1,10 @@
+pytube
+
+instaloader
+
+praw
+
+requests
+
+python-telegram-bot
+
