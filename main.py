@@ -1,106 +1,111 @@
 import os
+
 import logging
-import pytube
+
+from telegram import Update, Bot
+
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+
+from pytube import YouTube
+
 import instaloader
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+
 from tqdm import tqdm
 
-
-# Set up logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                     level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 
+def error_handler(update: Update, context: CallbackContext):
 
-# Define the start command handler
-def start(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id,
-                             text='Hi! Send me a YouTube or Instagram video link and I\'ll send you the download link.')
+    """Log the error and send a message to the user."""
 
+    logger.warning('Update "%s" caused error "%s"', update, context.error)
 
-# Define the video download handler
-def download_video(update, context):
-    try:
-        # Get the video link from the message
-        video_link = update.message.text
+    update.message.reply_text('Oops! Something went wrong. Please try again later.')
 
-        if 'youtube' in video_link:
-            # Create a PyTube object for the video
-            youtube_video = pytube.YouTube(video_link)
+def start(update: Update, context: CallbackContext):
 
-            # Get the highest resolution stream
-            video_stream = youtube_video.streams.get_highest_resolution()
-
-            # Get the video title
-            video_title = youtube_video.title
-
-            # Download the video
-            video_path = video_stream.download()
-
-            # Send the video file to the user with progress bar
-            with open(video_path, 'rb') as video_file:
-                context.bot.send_video(chat_id=update.effective_chat.id,
-                                       video=video_file,
-                                       caption=f'Download complete: {video_title}',
-                                       timeout=120,
-                                       progress=progress_callback)
-
-            # Delete the video file from the local system
-            os.remove(video_path)
-
-        elif 'instagram' in video_link:
-            # Create an Instaloader object for the video
-            instaloader_obj = instaloader.Instaloader()
-
-            # Download the video
-            video_filename = instaloader_obj.download_video(video_link)
-
-            # Get the video title
-            video_title = instaloader_obj.context.item_caption
-
-            # Send the video file to the user with progress bar
-            with open(video_filename, 'rb') as video_file:
-                context.bot.send_video(chat_id=update.effective_chat.id,
-                                       video=video_file,
-                                       caption=f'Download complete: {video_title}',
-                                       timeout=120,
-                                       progress=progress_callback)
-
-            # Delete the video file from the local system
-            os.remove(video_filename)
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-        context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text='Oops! Something went wrong. Please try again later.')
+    """Send a message when the command /start is issued."""
 
 
-# Define a progress bar callback function
-def progress_callback(current, total):
-    percentage = int((current / total) * 100)
-    text = f'Downloading... {percentage}%'
-    tqdm.write(text, end='\r')
+def download_video(update: Update, context: CallbackContext):
 
+    """Download a video from a YouTube or Instagram link."""
 
-# Define the main function
-def main():
-    # Get the bot token from the environment variable
-    bot_token = os.environ.get('BOT_TOKEN')
+    link = update.message.text
 
-    # Create an Updater object with the bot token
-    updater = Updater(token=bot_token, use_context=True)
+    if "youtube" in link:
 
-    # Get the dispatcher to register handlers
-    dp = updater.dispatcher
+        try:
 
-    # Register the start command handler
-    dp.add_handler(CommandHandler('start', start))
+            yt = YouTube(link)
 
-    # Register the video download handler
-    dp.add_handler(MessageHandler(Filters.regex('^https?://(?:www\.)?(youtube|instagram)\.com/'), download_video))
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
 
-    # Start the bot
-    updater.start_polling()
+            filename = yt.title + ".mp4"
 
-    # Run the bot until Ctrl-C is pressed or the process receives SIGINT, SIGTERM or SIGAB
+            filesize = stream.filesize
+
+            with open(filename, 'wb') as f:
+
+                progress_callback = lambda bytes_remaining, file_size: tqdm(total=file_size, initial=file_size - bytes_remaining, unit='B', unit_scale=True, desc=filename)
+
+                stream.download(output_path=".", filename=filename, progress_callback=progress_callback)
+
+            update.message.reply_text(f"Video downloaded successfully: {filename}")
+
+        except Exception as e:
+
+            logger.error(str(e))
+
+            update.message.reply_text(f"Oops! An error occurred while downloading the video.")
+
+    elif "instagram" in link:
+
+        try:
+
+            L = instaloader.Instaloader()
+
+            post = instaloader.Post.from_shortcode(L.context, link.split("/")[-2])
+
+            filename = post.owner_username + "-" + post.date.strftime("%Y-%m-%d") + ".mp4"
+
+            with open(filename, 'wb') as f:
+
+                progress_bar = tqdm(unit="B", total=post.video_url_info.get("video_versions")[0]["content_length"], desc=filename)
+
+                f.write(post.video_url.read(progress_bar.update))
+
+            update.message.reply_text(f"Video downloaded successfully: {filename}")
+
+        except Exception as e:
+
+            logger.error(str(e))
+
+            update.message.reply_text(f"Oops! An error occurred while downloading the video.")
+
+    else:
+
+        update.message.reply_text("I'm sorry, I don't recognize that link.")
+
+# create the Updater and pass in the bot token and error handler
+
+updater = Updater(token=os.environ.get("BOT_TOKEN"), use_context=True)
+
+updater.dispatcher.add_error_handler(error_handler)
+
+# add your handlers to the dispatcher
+
+updater.dispatcher.add_handler(CommandHandler("start", start))
+
+updater.dispatcher.add_handler(MessageHandler(Filters.regex(r'https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]+)').compile(), download_video))
+
+updater.dispatcher.add_handler(MessageHandler(Filters.regex(r'https?://(?:www\.)?(?:instagram\.com/p/|instagr\.am/p/)([\w-]+)').compile(), download_video))
+
+# start the bot
+
+updater.start_polling()
+
+updater.idle()
+
