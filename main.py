@@ -1,110 +1,106 @@
 import os
-
-import telegram
-
-from telegram.ext import Updater, CommandHandler
-
+import logging
 import pytube
-
 import instaloader
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from tqdm import tqdm
 
-import praw
 
-BOT_TOKEN = '6044904531:AAGvifbBd2dMbjjJN2ANOhcJX-dq3eeDRB0'
+# Set up logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                     level=logging.INFO)
 
+logger = logging.getLogger(__name__)
+
+
+# Define the start command handler
 def start(update, context):
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text='Hi! Send me a YouTube or Instagram video link and I\'ll send you the download link.')
 
-    """Send a welcome message when the command /start is issued."""
 
-    update.message.reply_text('Hi! Send me a YouTube, Instagram or Reddit video URL and I will download it for you.')
-
+# Define the video download handler
 def download_video(update, context):
+    try:
+        # Get the video link from the message
+        video_link = update.message.text
 
-    """Download a YouTube, Instagram or Reddit video and send it to the user."""
+        if 'youtube' in video_link:
+            # Create a PyTube object for the video
+            youtube_video = pytube.YouTube(video_link)
 
-    url = context.args[0] # Get the video URL from the user's message
+            # Get the highest resolution stream
+            video_stream = youtube_video.streams.get_highest_resolution()
 
-    if 'youtube.com' in url:
+            # Get the video title
+            video_title = youtube_video.title
 
-        # Download a YouTube video
+            # Download the video
+            video_path = video_stream.download()
 
-        video = pytube.YouTube(url).streams.get_highest_resolution()
+            # Send the video file to the user with progress bar
+            with open(video_path, 'rb') as video_file:
+                context.bot.send_video(chat_id=update.effective_chat.id,
+                                       video=video_file,
+                                       caption=f'Download complete: {video_title}',
+                                       timeout=120,
+                                       progress=progress_callback)
 
-        video.download() # Download the video to the current directory
+            # Delete the video file from the local system
+            os.remove(video_path)
 
-        video_file = open(video.default_filename, 'rb') # Open the video file
+        elif 'instagram' in video_link:
+            # Create an Instaloader object for the video
+            instaloader_obj = instaloader.Instaloader()
 
-        update.message.reply_video(video=video_file) # Send the video to the user
+            # Download the video
+            video_filename = instaloader_obj.download_video(video_link)
 
-        video_file.close() # Close the file
+            # Get the video title
+            video_title = instaloader_obj.context.item_caption
 
-    elif 'instagram.com' in url:
+            # Send the video file to the user with progress bar
+            with open(video_filename, 'rb') as video_file:
+                context.bot.send_video(chat_id=update.effective_chat.id,
+                                       video=video_file,
+                                       caption=f'Download complete: {video_title}',
+                                       timeout=120,
+                                       progress=progress_callback)
 
-        # Download an Instagram video
+            # Delete the video file from the local system
+            os.remove(video_filename)
 
-        insta = instaloader.Instaloader()
+    except Exception as e:
+        logger.error(e, exc_info=True)
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text='Oops! Something went wrong. Please try again later.')
 
-        insta.download_video(url) # Download the video to the current directory
 
-        video_file = open(insta.context.filename, 'rb') # Open the video file
+# Define a progress bar callback function
+def progress_callback(current, total):
+    percentage = int((current / total) * 100)
+    text = f'Downloading... {percentage}%'
+    tqdm.write(text, end='\r')
 
-        update.message.reply_video(video=video_file) # Send the video to the user
 
-        video_file.close() # Close the file
-
-    elif 'reddit.com' in url:
-
-        # Download a Reddit video
-
-        reddit = praw.Reddit(client_id='YOUR_CLIENT_ID',
-
-                             client_secret='YOUR_CLIENT_SECRET',
-
-                             username='YOUR_REDDIT_USERNAME',
-
-                             password='YOUR_REDDIT_PASSWORD',
-
-                             user_agent='YOUR_USER_AGENT')
-
-        submission = reddit.submission(url=url)
-
-        video_url = submission.media['reddit_video']['fallback_url']
-
-        video_file = open('reddit_video.mp4', 'wb')
-
-        video_file.write(requests.get(video_url).content)
-
-        video_file.close()
-
-        video_file = open('reddit_video.mp4', 'rb')
-
-        update.message.reply_video(video=video_file) # Send the video to the user
-
-        video_file.close()
-
-    else:
-
-        # Invalid URL
-
-        update.message.reply_text('Invalid URL. Please send me a valid YouTube, Instagram or Reddit video URL.')
-
+# Define the main function
 def main():
+    # Get the bot token from the environment variable
+    bot_token = os.environ.get('BOT_TOKEN')
 
-    """Start the bot."""
+    # Create an Updater object with the bot token
+    updater = Updater(token=bot_token, use_context=True)
 
-    updater = Updater(token=BOT_TOKEN, use_context=True)
+    # Get the dispatcher to register handlers
+    dp = updater.dispatcher
 
-    dispatcher = updater.dispatcher
+    # Register the start command handler
+    dp.add_handler(CommandHandler('start', start))
 
-    dispatcher.add_handler(CommandHandler('start', start))
+    # Register the video download handler
+    dp.add_handler(MessageHandler(Filters.regex('^https?://(?:www\.)?(youtube|instagram)\.com/'), download_video))
 
-    dispatcher.add_handler(CommandHandler('download_video', download_video))
-
+    # Start the bot
     updater.start_polling()
 
-    updater.idle()
-
-if __name__ == '__main__':
-
-    main()
-
+    # Run the bot until Ctrl-C is pressed or the process receives SIGINT, SIGTERM or SIGAB
