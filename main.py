@@ -92,7 +92,7 @@ def main():
 
     """Start the bot."""
 
-    updater = Updater(token='YOUR_BOT_TOKEN', use_context=True)
+    updater = Updater(token=BOT_TOKEN, use_context=True)
 
     dispatcher = updater.dispatcher
 
