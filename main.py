@@ -1,111 +1,55 @@
 import os
-
 import logging
+import pytube
+from telegram import ChatAction, InputFile
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
-from telegram import Update, Bot
-
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-
-from pytube import YouTube
-
-import instaloader
-
-from tqdm import tqdm
-
+# Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-logger = logging.getLogger(__name__)
+# Define the callback function for the /start command
+def start(update, context):
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Hi! Send me a YouTube video link and I'll upload the video file.")
 
-def error_handler(update: Update, context: CallbackContext):
-
-    """Log the error and send a message to the user."""
-
-    logger.warning('Update "%s" caused error "%s"', update, context.error)
-
-    update.message.reply_text('Oops! Something went wrong. Please try again later.')
-
-def start(update: Update, context: CallbackContext):
-
-    """Send a message when the command /start is issued."""
-
-
-def download_video(update: Update, context: CallbackContext):
-
-    """Download a video from a YouTube or Instagram link."""
-
-    link = update.message.text
-
-    if "youtube" in link:
-
-        try:
-
-            yt = YouTube(link)
-
-            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-
-            filename = yt.title + ".mp4"
-
-            filesize = stream.filesize
-
-            with open(filename, 'wb') as f:
-
-                progress_callback = lambda bytes_remaining, file_size: tqdm(total=file_size, initial=file_size - bytes_remaining, unit='B', unit_scale=True, desc=filename)
-
-                stream.download(output_path=".", filename=filename, progress_callback=progress_callback)
-
-            update.message.reply_text(f"Video downloaded successfully: {filename}")
-
-        except Exception as e:
-
-            logger.error(str(e))
-
-            update.message.reply_text(f"Oops! An error occurred while downloading the video.")
-
-    elif "instagram" in link:
-
-        try:
-
-            L = instaloader.Instaloader()
-
-            post = instaloader.Post.from_shortcode(L.context, link.split("/")[-2])
-
-            filename = post.owner_username + "-" + post.date.strftime("%Y-%m-%d") + ".mp4"
-
-            with open(filename, 'wb') as f:
-
-                progress_bar = tqdm(unit="B", total=post.video_url_info.get("video_versions")[0]["content_length"], desc=filename)
-
-                f.write(post.video_url.read(progress_bar.update))
-
-            update.message.reply_text(f"Video downloaded successfully: {filename}")
-
-        except Exception as e:
-
-            logger.error(str(e))
-
-            update.message.reply_text(f"Oops! An error occurred while downloading the video.")
-
+# Define the callback function for handling text messages
+def text_handler(update, context):
+    # Check if the message contains a YouTube video link
+    if 'youtube.com/watch?v=' in update.message.text:
+        # Send a "typing" action to the user
+        context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        # Download the video file
+        yt = pytube.YouTube(update.message.text)
+        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+        file_path = stream.download()
+        # Calculate the file size
+        file_size = os.path.getsize(file_path)
+        # Upload the video file with a progress bar
+        with open(file_path, 'rb') as f:
+            progress = 0
+            while True:
+                chunk = f.read(1024)
+                if not chunk:
+                    break
+                context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
+                context.bot.send_video(chat_id=update.effective_chat.id, video=InputFile(file_path), caption='Uploading...', supports_streaming=True, timeout=600)
+                progress += len(chunk)
+                percentage = progress / file_size * 100
+                context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=update.message.message_id, text=f"Uploading... {percentage:.1f}%")
+        # Delete the downloaded file
+        os.remove(file_path)
+        context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=update.message.message_id, text="Upload complete!")
     else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Please send a valid YouTube video link.")
 
-        update.message.reply_text("I'm sorry, I don't recognize that link.")
+# Set up the Telegram bot
+updater = Updater(token='6044904531:AAGvifbBd2dMbjjJN2ANOhcJX-dq3eeDRB0', use_context=True)
 
-# create the Updater and pass in the bot token and error handler
+# Set up the command handlers
+updater.dispatcher.add_handler(CommandHandler('start', start))
 
-updater = Updater(token=os.environ.get("BOT_TOKEN"), use_context=True)
+# Set up the message handlers
+updater.dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
 
-updater.dispatcher.add_error_handler(error_handler)
-
-# add your handlers to the dispatcher
-
-updater.dispatcher.add_handler(CommandHandler("start", start))
-
-updater.dispatcher.add_handler(MessageHandler(Filters.regex(r'https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]+)').compile(), download_video))
-
-updater.dispatcher.add_handler(MessageHandler(Filters.regex(r'https?://(?:www\.)?(?:instagram\.com/p/|instagr\.am/p/)([\w-]+)').compile(), download_video))
-
-# start the bot
-
+# Start the bot
 updater.start_polling()
-
 updater.idle()
-
